@@ -1,0 +1,6 @@
+[submodule "lib/DolRecomp"]
+	path = lib/DolRecomp
+	url = https://github.com/ExpansionPak/DolRecomp
+[submodule "lib/libPorpoise"]
+	path = lib/libPorpoise
+	url = https://github.com/ExpansionPak/libPorpoise.git
