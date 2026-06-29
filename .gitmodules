@@ -4,3 +4,6 @@
 [submodule "lib/libPorpoise"]
 	path = lib/libPorpoise
 	url = https://github.com/ExpansionPak/libPorpoise.git
+[submodule "lib/ModernGekko"]
+	path = lib/ModernGekko
+	url = https://github.com/ExpansionPak/ModernGekko.git
