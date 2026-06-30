@@ -24,6 +24,12 @@ MODERNGEKKO_DIR := $(LIB_DIR)/ModernGekko
 GXR_DIR			:= $(LIB_DIR)/GXR
 DOLRECOMP       := $(DOLRECOMP_DIR)/build/dolrecomp$(EXE)
 
+ifeq ($(DETECTED_OS),Windows)
+	LIBPORPOISE_BUILD := cd $(LIBPORPOISE_DIR) && build.bat
+else
+	LIBPORPOISE_BUILD := cd $(LIBPORPOISE_DIR) && ./build.sh
+endif
+
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -36,11 +42,8 @@ setup: ## Initialize submodules, build DolRecomp and libPorpoise
 	cd $(DOLRECOMP_DIR) && cmake -S . -B build
 	cd $(DOLRECOMP_DIR) && cmake --build build --config Release
 	cd $(DOLRECOMP_DIR) && ctest --test-dir build -C Release --output-on-failure
-	ifeq ($(DETECTED_OS),Windows)
-		cd $(LIBPORPOISE_DIR) && build.bat
-	else
-		cd $(LIBPORPOISE_DIR) && ./build.sh
-	endif
+	chmod +x lib/libPorpoise/build.sh
+	$(LIBPORPOISE_BUILD)
 .PHONY: setup
 
 extract-generate: ## Extract DOL from ISO using DolRecomp and generate code

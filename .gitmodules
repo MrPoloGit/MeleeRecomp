@@ -1,0 +1,9 @@
+[submodule "lib/DolRecomp"]
+	path = lib/DolRecomp
+	url = git@github.com:ExpansionPak/DolRecomp.git
+[submodule "lib/libPorpoise"]
+	path = lib/libPorpoise
+	url = git@github.com:ExpansionPak/libPorpoise.git
+[submodule "lib/ModernGekko"]
+	path = lib/ModernGekko
+	url = git@github.com:ExpansionPak/ModernGekko.git
