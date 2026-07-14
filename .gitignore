@@ -1,7 +1,10 @@
 iso/
+lib/
 extracted/
 generated/
 build/
+extern/
+database/
 build-*/
 cmake-build-*/
 CMakeUserPresets.json
