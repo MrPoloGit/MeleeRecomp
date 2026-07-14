@@ -23,12 +23,14 @@ CMAKE_BUILD_TYPE ?= Release
 # e.g. RUN_ARGS="--headless" or RUN_ARGS="--graphics Vulkan".
 RUN_ARGS ?=
 
-SUBMODULE_STAMP := .git/.recomp-submodules-stamp
+DOLRECOMP_REPO   := git@github.com:MrPoloGit/DolRecomp.git
+MODERNGEKKO_REPO := git@github.com:MrPoloGit/ModernGekko.git
+
 WIT_STAMP := .git/.recomp-wit-stamp
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all tools dolrecomp moderngekko submodules wit extract recompile run \
+.PHONY: help all tools dolrecomp moderngekko wit extract recompile run \
         clean clean-extracted clean-tools
 
 help:
@@ -60,34 +62,27 @@ help:
 
 all: tools
 
-# --- submodules -------------------------------------------------------------
+# --- lib clones ----------------------------------------------------------------
+$(DOLRECOMP_DIR)/.git:
+	git clone $(DOLRECOMP_REPO) $(DOLRECOMP_DIR)
+	git -C $(DOLRECOMP_DIR) submodule update --init --recursive
 
-$(SUBMODULE_STAMP): .gitmodules
-	git submodule update --init --recursive
-	@mkdir -p "$$(dirname "$(SUBMODULE_STAMP)")"
-	@touch "$(SUBMODULE_STAMP)"
-
-submodules: $(SUBMODULE_STAMP)
+$(MODERNGEKKO_DIR)/.git:
+	git clone $(MODERNGEKKO_REPO) $(MODERNGEKKO_DIR)
+	git -C $(MODERNGEKKO_DIR) submodule update --init --recursive
 
 # --- tools -------------------------------------------------------------------
-
-dolrecomp: submodules
+dolrecomp: $(DOLRECOMP_DIR)/.git
 	cmake -S $(DOLRECOMP_DIR) -B $(DOLRECOMP_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE)
 	cmake --build $(DOLRECOMP_BUILD) -j$(JOBS)
 
-moderngekko: submodules
+moderngekko: $(MODERNGEKKO_DIR)/.git
 	cmake -S $(MODERNGEKKO_DIR) -B $(MODERNGEKKO_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE)
 	cmake --build $(MODERNGEKKO_BUILD) -j$(JOBS)
 
 tools: dolrecomp moderngekko
 
-# Wii ISO extraction needs Wiimms ISO Tools; DolRecomp downloads its own
-# copy into extern/wit on first use. GameCube extraction doesn't need this,
-# but running it unconditionally keeps the pipeline simple.
-#
-# The prebuilt macOS wit binaries ship with a signature current Gatekeeper
-# rejects outright (`invalid signature (code or signature have been
-# modified)`, SIGKILL on launch) -- re-signing ad-hoc locally fixes it.
+# Wii ISO extraction needs Wiimms ISO Tools
 $(WIT_STAMP): | dolrecomp
 	echo y | $(DOLRECOMP_BIN) --setup
 	@if [ "$$(uname)" = "Darwin" ] && [ -d extern/wit/bin ]; then \
@@ -99,13 +94,6 @@ $(WIT_STAMP): | dolrecomp
 wit: $(WIT_STAMP)
 
 # --- recompile pipeline -------------------------------------------------------
-
-# Real file target: skipped automatically once this game has already been
-# extracted, so ISO is only required the first time per game. dolrecomp/wit
-# are order-only prerequisites (`|`) since they're phony/always "run" --
-# normal prerequisites would force re-extraction on every invocation.
-# GAME_SLUG always resolves to something (falls back to Melee), so the only
-# way this recipe runs with nothing to do is a game that isn't extracted yet.
 $(EXTRACTED_DIR)/sys/main.dol: | dolrecomp wit
 	@if [ -z "$(ISO)" ]; then \
 		echo "error: no extracted game at $(EXTRACTED_DIR) yet -- pass ISO=/path/to/game.iso" >&2; \
@@ -116,9 +104,6 @@ $(EXTRACTED_DIR)/sys/main.dol: | dolrecomp wit
 		exit 1; \
 	fi
 	$(DOLRECOMP_BIN) extract "$(ISO)" $(EXTRACTED_DIR)
-	@# Wii discs have multiple partitions (UPDATE/CHANNEL/DATA); the wit
-	@# bridge extracts each into its own subfolder instead of flattening
-	@# the game (DATA) partition to the top level like GameCube does.
 	@if [ ! -f "$(EXTRACTED_DIR)/sys/main.dol" ] && [ -f "$(EXTRACTED_DIR)/DATA/sys/main.dol" ]; then \
 		mv "$(EXTRACTED_DIR)/DATA"/* "$(EXTRACTED_DIR)/"; \
 		rmdir "$(EXTRACTED_DIR)/DATA"; \
