@@ -11,16 +11,6 @@ Both are pulled in as git submodules under `lib/`. Everything is driven through 
 
 CMake, Ninja, and pkg-config, plus a C11/C++23 toolchain. DolRecomp and ModernGekko both build on macOS, Linux, and Windows; this repo's `Makefile` doesn't do anything platform-specific itself - it just drives the same CMake builds each submodule supports natively. `TOOLCHAIN` (see below) defaults to the native compiler for whichever of these you're on.
 
-### macOS
-
-Via Homebrew:
-
-```
-brew install cmake ninja pkg-config
-```
-
-Xcode's command line tools are also required (AppleClang 14.0.3+; verified on AppleClang 17).
-
 ### Linux
 
 Ubuntu/Debian, matching what `lib/ModernGekko/vendor/dolphin`'s own CI installs for its NoGUI build (`.github/workflows/build.yml`):
@@ -31,6 +21,16 @@ sudo apt-get install -y ninja-build build-essential pkg-config cmake \
   libbluetooth-dev libasound2-dev libpulse-dev libgl1-mesa-dev \
   libxrandr-dev libxi-dev
 ```
+
+### macOS
+
+Via Homebrew:
+
+```
+brew install cmake ninja pkg-config
+```
+
+Xcode's command line tools are also required (AppleClang 14.0.3+; verified on AppleClang 17).
 
 `build-essential` pulls in GCC, the default toolchain on Linux (see "Toolchain" below for why). Other distros need the equivalent `-dev`/`-devel` packages from their own package manager (evdev, udev, GTK3, systemd, BlueZ, ALSA, PulseAudio, GL, Xrandr, Xi).
 
