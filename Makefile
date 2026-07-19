@@ -9,15 +9,27 @@ MODERNGEKKO_PORT_BIN := $(MODERNGEKKO_BUILD)/moderngekko-port
 # One game per slug directory, so multiple extracted discs (GameCube or
 # Wii, any title) can coexist. The slug is derived from ISO's filename the
 # first time a game is set up; pass GAME=<slug> on later invocations to
-# select it without ISO. With neither given, defaults to Melee.
-DEFAULT_GAME_SLUG := Super-Smash-Bros-Melee-USA-En-Ja-Rev-2-1-02
+# select it without ISO. There is no default game -- ISO= or GAME= must be
+# given.
 EXTRACTED_ROOT := extracted
-GAME_SLUG := $(if $(ISO),$(strip $(shell basename "$(ISO)" | sed -E 's/\.[Ii][Ss][Oo]$$//; s/[^A-Za-z0-9]+/-/g; s/^-+//; s/-+$$//')),$(if $(GAME),$(GAME),$(DEFAULT_GAME_SLUG)))
+GAME_SLUG := $(if $(ISO),$(strip $(shell basename "$(ISO)" | sed -E 's/\.[Ii][Ss][Oo]$$//; s/[^A-Za-z0-9]+/-/g; s/^-+//; s/-+$$//')),$(GAME))
 EXTRACTED_DIR := $(EXTRACTED_ROOT)/$(GAME_SLUG)
 MODULES_DIR   := build/modules
 
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 CMAKE_BUILD_TYPE ?= Release
+
+# Toolchain used to compile the per-game module: auto, clang, gcc, or msvc.
+# Defaults per-platform: gcc on Linux, Apple Clang on macOS, MSVC on Windows.
+# Override with TOOLCHAIN=<name> -- see the "Toolchain" section in README.md.
+ifeq ($(OS),Windows_NT)
+DEFAULT_TOOLCHAIN := msvc
+else ifeq ($(shell uname -s),Darwin)
+DEFAULT_TOOLCHAIN := clang
+else
+DEFAULT_TOOLCHAIN := gcc
+endif
+TOOLCHAIN ?= $(DEFAULT_TOOLCHAIN)
 
 # Extra arguments forwarded after `--` to `moderngekko-run` via `make run`,
 # e.g. RUN_ARGS="--headless" or RUN_ARGS="--graphics Vulkan".
@@ -36,8 +48,9 @@ WIT_STAMP := .git/.recomp-wit-stamp
 help:
 	@echo "MeleeRecomp"
 	@echo ""
-	@echo "Works with any GameCube or Wii ISO, not just Melee -- Melee is just"
-	@echo "the default when neither ISO= nor GAME= is given."
+	@echo "Works with any GameCube or Wii ISO -- there is no default game."
+	@echo "ISO= or GAME= is required the first time you run a target that"
+	@echo "needs an extracted game."
 	@echo ""
 	@echo "  make tools                       Build DolRecomp and ModernGekko"
 	@echo "  make extract ISO=path/to.iso     Extract a GameCube/Wii ISO"
@@ -45,8 +58,12 @@ help:
 	@echo "  make run ISO=path/to.iso         Recompile (if needed) and launch the game"
 	@echo "  make clean                       Remove all build output"
 	@echo ""
-	@echo "  make run                                          # Melee, once extracted"
-	@echo "  make run ISO=iso/Super\\ Smash\\ Bros...iso          # Melee, first time"
+	@echo "  make run ISO=iso/Your\\ Game.iso   # first time for a new game"
+	@echo "  make run GAME=Your-Game-Slug     # afterwards, once extracted"
+	@echo ""
+	@echo "TOOLCHAIN selects the compiler for the per-game module: auto, clang,"
+	@echo "gcc, or msvc. Defaults to gcc on Linux, clang on macOS, msvc on"
+	@echo "Windows. e.g. make run GAME=<slug> TOOLCHAIN=clang"
 	@echo ""
 	@echo "ISO only needs to be passed once per game. It also picks the slug"
 	@echo "used under extracted/<slug>/ -- pass GAME=<slug> on later invocations"
@@ -95,6 +112,10 @@ wit: $(WIT_STAMP)
 
 # --- recompile pipeline -------------------------------------------------------
 $(EXTRACTED_DIR)/sys/main.dol: | dolrecomp wit
+	@if [ -z "$(GAME_SLUG)" ]; then \
+		echo "error: no ISO= or GAME= given -- see 'make help'" >&2; \
+		exit 1; \
+	fi
 	@if [ -z "$(ISO)" ]; then \
 		echo "error: no extracted game at $(EXTRACTED_DIR) yet -- pass ISO=/path/to/game.iso" >&2; \
 		exit 1; \
@@ -114,10 +135,10 @@ extract: $(EXTRACTED_DIR)/sys/main.dol
 # moderngekko-port caches compiled modules by DOL hash + toolchain, so
 # re-running these is cheap once a module has already been built.
 recompile: moderngekko $(EXTRACTED_DIR)/sys/main.dol
-	$(MODERNGEKKO_PORT_BIN) build $(EXTRACTED_DIR) --output $(MODULES_DIR)
+	$(MODERNGEKKO_PORT_BIN) build $(EXTRACTED_DIR) --toolchain $(TOOLCHAIN) --output $(MODULES_DIR)
 
 run: moderngekko $(EXTRACTED_DIR)/sys/main.dol
-	$(MODERNGEKKO_PORT_BIN) run $(EXTRACTED_DIR) --output $(MODULES_DIR) -- $(RUN_ARGS)
+	$(MODERNGEKKO_PORT_BIN) run $(EXTRACTED_DIR) --toolchain $(TOOLCHAIN) --output $(MODULES_DIR) -- $(RUN_ARGS)
 
 # --- cleanup -------------------------------------------------------------------
 
