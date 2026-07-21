@@ -1,4 +1,4 @@
-# MeleeRecomp
+# GCWII-Recomp-Test
 
 A static-recompilation pipeline for GameCube and Wii games, built on:
 
