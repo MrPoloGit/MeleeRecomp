@@ -36,7 +36,19 @@ Xcode's command line tools are also required (AppleClang 14.0.3+; verified on Ap
 
 ### Windows
 
-Visual Studio 2022 (or the standalone Build Tools) with the "Desktop development with C++" workload, for the MSVC toolchain, plus CMake and Ninja on `PATH` (installable via winget/Chocolatey or their own installers). No external package manager is needed beyond that - Dolphin's Windows dependency tree (FFmpeg, SDL, etc.) is vendored as prebuilt binaries/source under `lib/ModernGekko/vendor/dolphin/Externals/`, unlike Linux where system `-dev` packages are expected.
+Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) (or full Visual Studio 2022) with the "Desktop development with C++" workload for the MSVC toolchain, plus CMake and Ninja on `PATH` (each has a standalone Windows installer, or install via `winget`/`choco`). No external package manager is needed beyond that for the build itself - Dolphin's Windows dependency tree (FFmpeg, SDL, etc.) is vendored as prebuilt binaries/source under `lib/ModernGekko/vendor/dolphin/Externals/`, unlike Linux where system `-dev` packages are expected. `pkg-config` isn't available on Windows out of the box, though:
+
+```
+winget install --id bloodrock.pkg-config-lite --source winget -e
+```
+
+MSVC isn't on `PATH` in an ordinary shell - build from a shell launched inside an **"x64 Native Tools Command Prompt for VS 2022"**. If you're using Git Bash (recommended; the `Makefile` needs a POSIX-ish shell and GNU coreutils, both of which Git Bash already provides), open that Native Tools prompt first, then launch Git Bash from inside it so it inherits the MSVC environment:
+
+```
+"C:\Program Files\Git\bin\bash.exe" --login -i
+```
+
+Run `make check` from that shell to verify everything (`cmake`, `ninja`, `pkg-config`, git, and a C++ compiler) is actually on `PATH` and runnable before building - it's also a build prerequisite, so a missing dependency fails fast with this same message instead of deep inside a CMake/Ninja log.
 
 ## Getting the Source
 
@@ -91,7 +103,8 @@ Run `make help` (or just `make`, the default target) for this list:
 
 | Target       | Description                                                |
 |--------------|--------------------------------------------------------------|
-| `tools`      | Build DolRecomp and ModernGekko                             |
+| `check`      | Verify CMake, Ninja, pkg-config, git, and a C++ compiler are on `PATH` and runnable |
+| `tools`      | Build DolRecomp and ModernGekko (runs `check` first)         |
 | `extract`    | Extract a GameCube/Wii ISO into `extracted/<slug>/`         |
 | `recompile`  | Recompile + compile a runnable module                       |
 | `run`        | Recompile (if needed) and launch the game                   |
@@ -146,9 +159,22 @@ DolRecomp already builds cleanly on macOS with no changes. ModernGekko needed fo
 3. **Cocoa windowing backend** (`CMakeLists.txt`, `src/runtime/dolphin_runtime.cpp`) - upstream `Runtime::Create()` only ever selected Headless, Wayland, or X11, so any non-headless run failed with "the requested Dolphin host platform is unavailable." Dolphin's real Cocoa backend (`PlatformMacos.mm`) already existed in the vendored source; it just wasn't wired up. Without this fix the game builds and loads fine but never opens a window.
 4. **`ENABLE_CUBEB ON` on `APPLE`** (`CMakeLists.txt`) - upstream forced Cubeb (Dolphin's only real audio backend on macOS; it wraps CoreAudio) off unconditionally, leaving only the silent `NullSoundStream` backend regardless of config.
 
-These are being upstreamed into [ModernGekko](https://github.com/ExpansionPak/ModernGekko) directly. Once merged, this repo's `lib/ModernGekko` pin can move to a plain upstream commit with no local patch required.
-
 Separately, this repo's own `Makefile` works around one macOS-specific tooling issue: the official prebuilt `wit` binary (used for Wii extraction) ships with a signature Gatekeeper rejects outright on current macOS (`invalid signature (code or signature have been modified)`, killed on launch). The `wit` target re-signs it locally (ad-hoc) after download, which resolves it.
+
+## Windows Support
+
+DolRecomp builds unmodified on Windows. ModernGekko needed a number of fixes, all in `lib/ModernGekko/CMakeLists.txt` unless noted, since its own targets (`moderngekko`, `moderngekko_legacy`, `moderngekko-launcher`) compile `vendor/dolphin` sources directly and sit outside that submodule's own CMake directory scope — so none of the flags/definitions it sets for itself reach them:
+
+1. **`/Zc:preprocessor` on MSVC** — Dolphin's fmt-based logging macros (`Common/HookableEvent.h`, `Common/Logging/Log.h`) and Dear ImGui's `IM_ASSERT` use `__VA_OPT__`, which MSVC's classic (non-conforming) preprocessor mishandles (`C5109`/`C3878`/`C2146` and friends). Scoped to `moderngekko`, `moderngekko_legacy`, `moderngekko_dolphin_video`, and `moderngekko-launcher` specifically, not applied globally — see point 2.
+2. **`NOMINMAX` / `WIN32_LEAN_AND_MEAN` / `UNICODE` / `_UNICODE` / CRT-warning suppressions** — `vendor/dolphin/Source/CMakeLists.txt` already sets these for targets built inside its own tree (`core`, `uicommon`, ...), but not for ModernGekko's own targets. Without `NOMINMAX`, `Common/BitField.h`'s `std::numeric_limits<T>::max()` collides with `windows.h`'s `max()` macro; without `WIN32_LEAN_AND_MEAN`, `windows.h` drags in the legacy `winsock.h` ahead of `winsock2.h`; without `_UNICODE`, `Common/StringUtil.h`'s `TStrToUTF8`/`UTF8ToTStr` fall into the wrong `#ifdef` branch and fail to compile. These are applied per-target (not globally) because `vendor/dolphin/Externals/hidapi`'s vendored `hidapi_cfgmgr32.h` breaks under `WIN32_LEAN_AND_MEAN` — its `PROPERTYKEY`/`DEFINE_PROPERTYKEY` declarations depend on the un-lean `<windows.h>` expansion.
+3. **`PlatformWin32` windowing backend** (`CMakeLists.txt`, `src/runtime/dolphin_runtime.cpp`) — same shape of gap as the macOS Cocoa fix above: upstream `Runtime::Create()` only ever selected Headless, Wayland, or X11/macOS, so any non-headless run failed with "the requested Dolphin host platform is unavailable." Dolphin's real Win32 backend (`PlatformWin32.cpp`) already existed in the vendored source, just unused; it also needs `Dwmapi.lib` linked (`DwmSetWindowAttribute`).
+4. **`UICommon::CreateDirectories()`** (`src/runtime/dolphin_runtime.cpp`) — real Dolphin frontends call this between `SetUserDirectory()` and `Init()` (see `DolphinQt/Main.cpp`) to eagerly create the user directory tree. Without it, a brand-new user directory is missing `Cache/`, and `ShaderCache`'s later lazy, single-level `File::CreateDir("Cache/Shaders/")` fails because its parent doesn't exist — breaking shader caching/compilation silently (black screen, no error) on a fresh install.
+5. **`ENABLE_CUBEB ON` on `WIN32`, not just `APPLE`** — `AudioCommon::GetDefaultSoundBackend()` only ever tries Cubeb, then ALSA on Linux, before falling through to the silent `NullSoundStream`; it never considers WASAPI even though `WASAPIStream.cpp` is compiled in unconditionally for `WIN32`. Upstream Dolphin's own default is `ENABLE_CUBEB=ON` on every platform — this repo had narrowed it to `APPLE` only.
+
+Two fixes live outside ModernGekko's `CMakeLists.txt`:
+
+- **`moderngekko-port`'s `std::system()` calls mangle multi-argument commands on Windows** (`tools/moderngekko_port.cpp`) — `system()` runs commands via `cmd.exe /c <command>`, and `cmd`'s quote-stripping for `/C` only behaves predictably with exactly two quote characters on the line. Commands quoting multiple path arguments (the executable plus each path) hit `cmd`'s fallback heuristic instead, which mangles argument boundaries — surfacing as e.g. "The filename, directory name, or volume label syntax is incorrect" from the spawned tool. Fixed by wrapping the whole command in one more pair of quotes when it starts with one (`RunCommand()`), the documented workaround (see `cmd /?`).
+- **Cache-key directory names could exceed `MAX_PATH`** (`tools/moderngekko_port.cpp`) — the per-build cache directory was named `<64-char dol_sha256>-<16-char toolchain hash>`; combined with a deeply-nested checkout path and further module-build subdirectories, generated object file paths could exceed Windows' legacy 260-character path limit (`cl : Command line error D8022 : cannot open '...rsp'`). The `dol_sha256` component is truncated to 16 characters in the cache-key directory name — cache correctness is unaffected since the full hash is still what's compared for cache-hit validity, via `manifest.txt`.
 
 ## Local Patches (`lib/ModernGekko`)
 

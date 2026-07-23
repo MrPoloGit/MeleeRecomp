@@ -42,8 +42,67 @@ WIT_STAMP := .git/.recomp-wit-stamp
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all tools dolrecomp moderngekko wit extract recompile run \
+.PHONY: help all check tools dolrecomp moderngekko wit extract recompile run \
         clean clean-extracted clean-tools
+
+# Verifies the tools this Makefile and the CMake builds it drives actually
+# need are present and runnable, on whichever of Linux/macOS/Windows `make`
+# is invoked from. Fails fast with an actionable message instead of a build
+# dying deep inside a CMake/Ninja log.
+check:
+	@ok=1; \
+	os="$$(uname -s 2>/dev/null || echo unknown)"; \
+	case "$$os" in \
+		Linux*) platform=Linux ;; \
+		Darwin*) platform=macOS ;; \
+		MINGW*|MSYS*|CYGWIN*) platform=Windows ;; \
+		*) platform="unknown ($$os)" ;; \
+	esac; \
+	echo "platform: $$platform"; \
+	for tool in cmake ninja pkg-config git; do \
+		if command -v "$$tool" >/dev/null 2>&1; then \
+			echo "  [ok]      $$tool -> $$(command -v "$$tool")"; \
+		else \
+			echo "  [MISSING] $$tool"; \
+			ok=0; \
+		fi; \
+	done; \
+	if command -v cl >/dev/null 2>&1 || command -v clang++ >/dev/null 2>&1 || \
+	   command -v g++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1; then \
+		echo "  [ok]      C++ compiler found"; \
+	else \
+		echo "  [MISSING] no C++ compiler on PATH"; \
+		ok=0; \
+	fi; \
+	if [ "$$ok" = "0" ]; then \
+		echo ""; \
+		echo "missing dependencies -- install steps for $$platform:"; \
+		case "$$platform" in \
+			macOS) \
+				echo "  brew install cmake ninja pkg-config"; \
+				echo "  xcode-select --install   # AppleClang 14.0.3+"; \
+				;; \
+			Linux) \
+				echo "  install cmake, ninja-build, pkg-config, and a C11/C++23-capable"; \
+				echo "  gcc or clang via your distro's package manager"; \
+				;; \
+			Windows) \
+				echo "  cmake, ninja: confirm they're on PATH (winget/choco/manual install)"; \
+				echo "  pkg-config:   winget install --id bloodrock.pkg-config-lite --source winget -e"; \
+				echo "  C++ compiler: install Visual Studio Build Tools (Desktop C++ workload),"; \
+				echo "                then run make from a shell launched inside an"; \
+				echo "                'x64 Native Tools Command Prompt for VS 2022' -- e.g.:"; \
+				echo "                  \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i"; \
+				echo "                cl.exe is not visible in a plain shell otherwise."; \
+				;; \
+			*) \
+				echo "  unrecognized platform ($$os) -- install cmake, ninja, pkg-config,"; \
+				echo "  and a C11/C++23-capable compiler manually"; \
+				;; \
+		esac; \
+		exit 1; \
+	fi; \
+	echo "environment OK"
 
 help:
 	@echo "MeleeRecomp"
@@ -89,11 +148,11 @@ $(MODERNGEKKO_DIR)/.git:
 	git -C $(MODERNGEKKO_DIR) submodule update --init --recursive
 
 # --- tools -------------------------------------------------------------------
-dolrecomp: $(DOLRECOMP_DIR)/.git
+dolrecomp: check $(DOLRECOMP_DIR)/.git
 	cmake -S $(DOLRECOMP_DIR) -B $(DOLRECOMP_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE)
 	cmake --build $(DOLRECOMP_BUILD) -j$(JOBS)
 
-moderngekko: $(MODERNGEKKO_DIR)/.git
+moderngekko: check $(MODERNGEKKO_DIR)/.git
 	cmake -S $(MODERNGEKKO_DIR) -B $(MODERNGEKKO_BUILD) -G Ninja -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE)
 	cmake --build $(MODERNGEKKO_BUILD) -j$(JOBS)
 
