@@ -197,3 +197,36 @@ make clean-tools       # DolRecomp/ModernGekko build trees only
 ## License
 
 DolRecomp and ModernGekko are each distributed under their own upstream licenses (see `lib/DolRecomp/LICENSE` and `lib/ModernGekko/LICENSE`, the latter GPL-3.0-or-later due to its Dolphin-derived runtime). No Nintendo disc image, extracted game data, keys, or copyrighted assets are part of this repository - bring your own legally-owned dump.
+
+## Notes
+
+A consolidated log of everything changed (code and configuration) to get a build actually launching, rendering, and running at a reasonable speed on Windows, beyond what's already itemized in "Windows Support" and "Local Patches" above.
+
+### Correctness
+
+- **External-interrupt delivery bug** (`lib/ModernGekko/vendor/dolphin/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp`) - the post-burst exception check was gated on `SYNC_EXCEPTION_MASK` (synchronous exceptions only), so `EXCEPTION_EXTERNAL_INT`/`DECREMENTER`/`PERFORMANCE_MONITOR` (e.g. VI's vblank interrupt) were scheduled by `CoreTiming` but never actually delivered anywhere in the static-recomp dispatch loop. Changed the check to `ppc.Exceptions != 0` unconditionally - `CheckExceptions()` already routes to `CheckExternalExceptions()` internally when no synchronous exception is pending, so this is correct for both cases. This was a black-screen/never-boots failure mode, not Windows-specific.
+
+### Windows-specific code fixes
+
+- **`cpu.c` MSVC export** (`lib/ModernGekko/vendor/dolphin/GXRuntime/src/core/cpu.c`) - `ppc_set_mem_write_journal` used `__attribute__((visibility("default")))` to stay visible for `GetProcAddress` lookup; MSVC has no such attribute. Added a `__declspec(dllexport)` branch under `#if defined(_MSC_VER)`.
+- **`ARCHIVE_OUTPUT_NAME` for `moderngekko-launcher`** (`lib/ModernGekko/CMakeLists.txt`) - on Windows' case-insensitive filesystem, the launcher exe's auto-generated import lib (`ModernGekko.lib`) collided with the `moderngekko` static runtime lib (`moderngekko.lib`) it links against (`LNK1149`). Gave the import lib a distinct name (`ModernGekkoLauncher.lib`) without renaming the exe.
+- **`moderngekko-port` Windows path/quoting fixes** (`lib/ModernGekko/tools/moderngekko_port.cpp`):
+  - `Quote()` now uses `generic_string()` instead of `string()` so quoted paths always use `/`, never a `/`+`\` mix - which broke `cmd.exe`'s re-quoting when a path built by appending onto a literal like `build/modules` reached it.
+  - `RunCommand()` wraps the whole command in an extra pair of quotes when it already starts with one - `cmd.exe /c`'s quote-stripping only behaves predictably for exactly two quote characters on the line; without this, commands quoting multiple path arguments mangled argument boundaries (surfacing as e.g. "The filename, directory name, or volume label syntax is incorrect").
+  - Cache-key directory names truncate `dol_sha256` to 16 characters instead of the full 64 - combined with a deeply-nested checkout and module-build path, the full hash pushed generated object-file paths past Windows' 260-character `MAX_PATH` (`cl.exe` failing to open its `.rsp` file, `D8022`). The full hash is still what's compared for cache-hit validity via `manifest.txt`, so this doesn't affect cache correctness.
+  - The tool's own final launch now goes through `RunCommand()` instead of a raw `std::system()` call, so it gets the same quoting fix as every other command it runs.
+
+### Per-game module build performance
+
+- **Optimization flags raised from `-O2`/`/O2` to `-O3`/whole-program**:
+  - `lib/ModernGekko/vendor/dolphin/module-template/CMakeLists.txt` - Clang and GCC module builds now use `-O3` (was `-O2`); MSVC adds `/GL` (whole-program optimization) + `/LTCG` (link-time code generation), its closest equivalent to Clang's ThinLTO since MSVC has no `/O3`.
+  - `lib/ModernGekko/tools/moderngekko_port.cpp`'s per-toolchain cache-key flag strings updated to match (`-O3` for Clang/GCC, `/O2 /fp:strict /GL` for MSVC), so the cache key actually changes when these flags do instead of silently reusing a stale cached module.
+- **Measured on Windows**: an MSVC-only build measured ~13% speed / 8 FPS in one test; switching just the per-game module to Clang (`-O3 -flto=thin`, host stays MSVC) measured ~28% speed / 16 FPS - a confirmed ~2x improvement. The module/host ABI boundary is plain C (a `CPUState*` struct and a `GetProcAddress`-resolved `dispatch()` function, no C++ across it), so mixing host and module compilers is safe. Until MSVC's module codegen is tuned further, prefer `TOOLCHAIN=clang` on Windows explicitly - the Makefile's per-platform default is still `msvc` there.
+- **Still open**: even at Clang `-O3`, Windows speed lags noticeably behind what the same generated code reportedly achieves on Linux/macOS. Leading hypothesis: the Windows x64 calling convention mandates 10 callee-saved XMM registers (`XMM6`-`XMM15`) across any function call, while System V (Linux/macOS) has zero - a real per-call tax on the ~10M/sec `dispatch()` calls into floating-point-heavy generated code, independent of compiler. Untested next steps: `__vectorcall` on the hot `dispatch()` call path (supported by both MSVC and Clang on Windows); reducing `EMIT_CHUNK_INSTRUCTIONS` (`lib/DolRecomp/src/backend/codegen.h`, currently `4096`) to produce smaller, more optimizer-tractable generated functions.
+
+### Runtime configuration (not code - ModernGekko's user config, `~/.local/share/moderngekko/Config/` by default)
+
+- `Logger.ini` - quieted from noisy defaults (`Verbosity = 3`, all `WriteTo*` off, only `BOOT`/`CORE`/`OSREPORT`/`OSREPORT_HLE`/`MASTER`/`COMMON` logs enabled). The default verbosity had enough overhead to look like a performance bug on its own before real profiling started.
+- `GFX.ini` - added `ShowFPS = True`, `ShowVPS = True`, `ShowSpeed = True` for the on-screen perf overlay used throughout the performance investigation above.
+- `Dolphin.ini` - `CPUCore = 6` selects the static-recomp core; `FastDiscSpeed = True`, `CPUThread = True`, `DSPThread = True`; `SIDevice0 = 12` (`SIDEVICE_WIIU_ADAPTER`) routes controller input through the dedicated GC Adapter driver path instead of the generic SDL-joystick binding system.
+- **GameCube controller adapter** (Mayflash-style, `libusb`-based) - needs a WinUSB (or libusbK) driver bound to it via [Zadig](https://zadig.akeo.ie/) before `libusb_open()` can succeed; Windows' default HID driver otherwise claims the device first. `GCPadNew.ini`/`GCKeyNew.ini`/`WiimoteNew.ini` still need to be hand-authored or copied in regardless (see "Controller Input" above) - the adapter/Zadig step is specifically about physical controllers plugged into an adapter rather than the ini bindings themselves.
